@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "w3bsp1d3r"
+version = "1.0.0"
+description = "Web vulnerability scanner with OWASP Top 10 coverage — by S1YOL"
+readme = "README.md"
+requires-python = ">=3.8"
+license = {text = "MIT"}
+authors = [{name = "S1YOL"}]
+
+dependencies = [
+    "requests>=2.31.0",
+    "beautifulsoup4>=4.12.0",
+    "lxml>=4.9.0",
+    "rich>=13.7.0",
+    "defusedxml>=0.7.0",
+]
+
+[project.optional-dependencies]
+gui = ["streamlit>=1.30.0"]
+
+[project.scripts]
+w3bsp1d3r = "main:main"
+
+[tool.setuptools.packages.find]
+include = ["scanner*"]

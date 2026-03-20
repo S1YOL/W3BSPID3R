@@ -1,0 +1,8 @@
+requests>=2.31.0
+beautifulsoup4>=4.12.0
+lxml>=4.9.0
+rich>=13.7.0
+defusedxml>=0.7.0
+
+# GUI (optional — only needed for gui.py)
+streamlit>=1.30.0
