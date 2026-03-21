@@ -377,12 +377,12 @@ class XSSTester(BaseTester):
             # Event handler attributes (onerror, onload, onfocus, ontoggle …)
             rf"on\w+\s*=\s*['\"]?[^'\"]*{m}",
             # <img / <svg / <body / <details / <input tags with event attrs
-            rf"<(?:img|svg|body|details|input)\b[^>]*on\w+\s*=",
+            r"<(?:img|svg|body|details|input)\b[^>]*on\w+\s*=",
             # javascript: protocol
             rf"javascript\s*:.*?{m}",
             # Raw tag break-out: "> or '> immediately before a <script or event
-            rf'["\'][>\s]*<script',
-            rf"[\"'][>\s]*<(?:img|svg|body|details|input)\b[^>]*on\w+",
+            r'["\'][>\s]*<script',
+            r"[\"'][>\s]*<(?:img|svg|body|details|input)\b[^>]*on\w+",
         ]
 
         for pattern in structural_patterns:

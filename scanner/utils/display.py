@@ -18,7 +18,6 @@ import threading
 import time
 
 from rich.console import Console
-from rich.layout import Layout
 from rich.live import Live
 from rich.panel import Panel
 from rich.table import Table
@@ -32,7 +31,6 @@ from rich.progress import (
     TaskProgressColumn,
 )
 from rich.rule import Rule
-from rich.style import Style
 from rich import box
 
 from scanner.reporting.models import Finding, ScanSummary, Severity
@@ -371,10 +369,9 @@ class RateLimitDashboard:
 
         # Throughput and delay row
         try:
-            effective = _get_effective_delay()
+            _get_effective_delay()
             adapt = _adaptive_delay
         except Exception:
-            effective = 0
             adapt = 0
 
         tbl.add_row(

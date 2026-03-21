@@ -434,7 +434,6 @@ def _request_with_retry(
     kwargs.setdefault("timeout", _timeout)
     kwargs.setdefault("allow_redirects", True)
 
-    last_exc = None
     retried = False
 
     for attempt in range(_retry_config.max_retries + 1):
@@ -502,7 +501,6 @@ def _request_with_retry(
             return resp
 
         except (requests.ConnectionError, requests.Timeout) as exc:
-            last_exc = exc
             elapsed = time.monotonic() - start_time
 
             if attempt < _retry_config.max_retries:

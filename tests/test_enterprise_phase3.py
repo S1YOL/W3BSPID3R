@@ -14,12 +14,10 @@ import json
 import os
 import tempfile
 import unittest
-from datetime import datetime, timezone
-from unittest.mock import patch, MagicMock
+from datetime import datetime
 
 from scanner.reporting.models import (
-    Finding, ScanSummary, VulnType, Severity,
-    OWASP_TOP_10, get_owasp_category,
+    Finding, ScanSummary, VulnType, get_owasp_category,
 )
 
 
@@ -312,10 +310,10 @@ class TestTicketingFormat(unittest.TestCase):
 
     def test_severity_threshold(self):
         from scanner.integrations.ticketing import _meets_threshold
-        assert _meets_threshold("Critical", "Medium") == True
-        assert _meets_threshold("High", "Medium") == True
-        assert _meets_threshold("Medium", "Medium") == True
-        assert _meets_threshold("Low", "Medium") == False
+        assert _meets_threshold("Critical", "Medium")
+        assert _meets_threshold("High", "Medium")
+        assert _meets_threshold("Medium", "Medium")
+        assert not _meets_threshold("Low", "Medium")
 
     def test_jira_config_defaults(self):
         from scanner.integrations.ticketing import JiraConfig
