@@ -4,8 +4,8 @@
 
 ```
   ╦ ╦╔═╗╔╗ ╔═╗╔═╗╦╔╦╗╔═╗╦═╗
-  ║║║╠═╣╠╩╗╚═╗╠═╝║ ║║║╣ ╠╦╝
-  ╚╩╝╩ ╩╚═╝╚═╝╩  ╩═╩╝╚═╝╩╚═
+  ║║║ ═╣╠╩╗╚═╗╠═╝║ ║║ ═╣╠╦╝
+  ╚╩╝╚═ ╚═╝╚═╝╩  ╩═╩╝╚═ ╩╚═
 ```
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
@@ -112,13 +112,13 @@ If you don't have Python, download it from [python.org](https://www.python.org/d
 ### Option 1: Git Clone (all platforms)
 
 ```bash
-git clone https://github.com/S1YOL/W3BSP1D3R.git
+git clone https://github.com/S1YOL/W3BSPID3R.git
 cd W3BSP1D3R
 ```
 
 ### Option 2: Download from Releases
 
-Go to [Releases](https://github.com/S1YOL/W3BSP1D3R/releases) and download:
+Go to [Releases](https://github.com/S1YOL/W3BSPID3R/releases) and download:
 - **Windows** → `W3BSP1D3R-beta.zip` — right-click → Extract All
 - **macOS / Linux** → `W3BSP1D3R-beta.tar.gz` — extract with `tar -xzf W3BSP1D3R-beta.tar.gz`
 

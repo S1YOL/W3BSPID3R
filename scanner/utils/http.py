@@ -39,8 +39,8 @@ _lock = threading.Lock()  # Protects _session access across threads
 
 # Default scanner identity string — be transparent about what you are
 SCANNER_UA = (
-    "W3BSP1D3R/1.0 (Educational Security Research Tool; "
-    "by S1YOL - github.com/siyol/web-vuln-scanner)"
+    "W3BSP1D3R/2.0 (Enterprise Security Scanner; "
+    "by S1YOL - github.com/S1YOL/W3BSPID3R)"
 )
 
 # Default delays (seconds) — configurable at init time

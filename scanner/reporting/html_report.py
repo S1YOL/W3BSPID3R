@@ -78,7 +78,7 @@ def _build_html(summary: ScanSummary) -> str:
 def _build_header(summary: ScanSummary) -> str:
     return f"""
 <header>
-  <div class="scanner-badge">W3BSP1D3R v1.0.0 — by S1YOL</div>
+  <div class="scanner-badge">W3BSP1D3R v2.0.0 — by S1YOL</div>
   <h1>Web Vulnerability Scan Report</h1>
   <div class="meta-grid">
     <div class="meta-item"><span class="label">Target</span><code>{html.escape(summary.target_url)}</code></div>

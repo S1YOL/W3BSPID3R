@@ -121,7 +121,7 @@ def create_api_app(db=None, api_keys: list[str] | None = None):
         return jsonify({
             "status": "ok",
             "scanner": "W3BSP1D3R",
-            "version": "1.0.0",
+            "version": "2.0.0",
             "timestamp": datetime.now(timezone.utc).isoformat(),
         })
 

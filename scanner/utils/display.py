@@ -69,11 +69,11 @@ BANNER = r"""
    \  |  /       \  |  /       \  |  /       \  |  /       \  |  /
     \ | /         \ | /         \ | /         \ | /         \ | /
 
-  #   #  ###  ##   ###  ##    #  ##   ###  ###
-  #   #    #  # #  #    # #   #  # #    #  # #
-  # # #  ###  ##   ###  ##    #  # #  ###  ###
-  ## ##    #  # #    #  #     #  # #    #  # #
-  #   #  ###  ##   ###  #     #  ##   ###  # #
+  W   W  333  BBB   SSS  PPP  III DDD   333  RRR
+  W   W    3  B  B  S    P  P  I  D  D    3  R  R
+  W W W  333  BBB   SSS  PPP   I  D  D  333  RRR
+  WW WW    3  B  B    S  P     I  D  D    3  R R
+  W   W  333  BBB  SSS   P    III DDD   333  R  R
 
               Web Vulnerability Scanner
 
@@ -82,7 +82,7 @@ BANNER = r"""
   /   |   \     /   |   \     /   |   \     /   |   \     /   |   \
 """
 
-def print_banner(version: str = "1.0.0") -> None:
+def print_banner(version: str = "2.0.0") -> None:
     """Print the scanner ASCII banner and ethical warning."""
     console.print(BANNER, style="bold red")
     console.print(
