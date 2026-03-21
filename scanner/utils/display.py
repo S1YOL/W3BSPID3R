@@ -14,7 +14,12 @@ Import pattern:
     from scanner.utils.display import console, print_finding, print_banner, ...
 """
 
+import threading
+import time
+
 from rich.console import Console
+from rich.layout import Layout
+from rich.live import Live
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
@@ -261,3 +266,162 @@ def make_progress() -> Progress:
         console=console,
         transient=False,
     )
+
+
+# ---------------------------------------------------------------------------
+# Rate limit dashboard — live terminal UI showing HTTP metrics
+# ---------------------------------------------------------------------------
+
+class RateLimitDashboard:
+    """
+    Live terminal dashboard showing real-time HTTP request metrics.
+
+    Displays:
+      - Total / successful / failed / retried request counts
+      - Current adaptive delay and effective throughput
+      - Rate-limited (429) count
+      - Bytes transferred
+      - Average response time
+      - Visual throughput bar
+
+    Usage:
+        dashboard = RateLimitDashboard()
+        dashboard.start()
+        # ... scan runs ...
+        dashboard.stop()
+
+    Or as a context manager:
+        with RateLimitDashboard():
+            # ... scan runs ...
+    """
+
+    def __init__(self, refresh_rate: float = 0.5) -> None:
+        self._refresh_rate = refresh_rate
+        self._live: Live | None = None
+        self._stop_event = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._start_time = 0.0
+        self._extra_info: dict[str, str] = {}
+
+    def start(self) -> None:
+        """Start the live dashboard in a background thread."""
+        self._start_time = time.monotonic()
+        self._stop_event.clear()
+        self._live = Live(
+            self._build_display(),
+            console=console,
+            refresh_per_second=2,
+            transient=True,
+        )
+        self._live.start()
+        self._thread = threading.Thread(target=self._update_loop, daemon=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        """Stop the dashboard and print a final static snapshot."""
+        self._stop_event.set()
+        if self._thread:
+            self._thread.join(timeout=2)
+        if self._live:
+            self._live.stop()
+            self._live = None
+        # Print final snapshot
+        console.print(self._build_display())
+
+    def set_info(self, key: str, value: str) -> None:
+        """Set extra info to display (e.g. current phase, active testers)."""
+        self._extra_info[key] = value
+
+    def __enter__(self):
+        self.start()
+        return self
+
+    def __exit__(self, *args):
+        self.stop()
+
+    def _update_loop(self) -> None:
+        while not self._stop_event.is_set():
+            if self._live:
+                try:
+                    self._live.update(self._build_display())
+                except Exception:
+                    pass
+            time.sleep(self._refresh_rate)
+
+    def _build_display(self) -> Panel:
+        from scanner.utils.http import get_metrics, _get_effective_delay, _delay, _adaptive_delay
+
+        m = get_metrics()
+        elapsed = time.monotonic() - self._start_time if self._start_time else 0
+        rps = m["total_requests"] / max(elapsed, 0.01)
+
+        # Main metrics table
+        tbl = Table(box=box.SIMPLE, show_header=False, padding=(0, 2), expand=True)
+        tbl.add_column("Metric", style="bold", width=20)
+        tbl.add_column("Value", width=15)
+        tbl.add_column("Metric", style="bold", width=20)
+        tbl.add_column("Value", width=15)
+
+        tbl.add_row(
+            "Requests",  f"[white]{m['total_requests']}[/white]",
+            "Successful", f"[green]{m['successful']}[/green]",
+        )
+        tbl.add_row(
+            "Failed",    f"[red]{m['failed']}[/red]",
+            "Retried",   f"[yellow]{m['retried']}[/yellow]",
+        )
+        tbl.add_row(
+            "Rate Limited", f"[bold yellow]{m['rate_limited']}[/bold yellow]",
+            "Avg Response",  f"[cyan]{m['avg_response_time']:.3f}s[/cyan]",
+        )
+
+        # Throughput and delay row
+        try:
+            effective = _get_effective_delay()
+            adapt = _adaptive_delay
+        except Exception:
+            effective = 0
+            adapt = 0
+
+        tbl.add_row(
+            "Throughput",   f"[bold white]{rps:.1f} req/s[/bold white]",
+            "Data Received", _format_bytes(m["total_bytes"]),
+        )
+        tbl.add_row(
+            "Base Delay",   f"[dim]{_delay:.2f}s[/dim]",
+            "Adaptive +",    f"[{'bold yellow' if adapt > 0 else 'dim'}]{adapt:.2f}s[/{'bold yellow' if adapt > 0 else 'dim'}]",
+        )
+
+        # Throughput bar
+        bar_width = 40
+        bar_fill = min(int(rps * 4), bar_width)  # Scale: 10 rps = full bar
+        bar = "[green]" + "█" * bar_fill + "[/green]" + "[dim]░[/dim]" * (bar_width - bar_fill)
+        throughput_line = f"  Throughput  {bar}  {rps:.1f}/s"
+
+        # Extra info
+        extra_lines = ""
+        for key, val in self._extra_info.items():
+            extra_lines += f"\n  [dim]{key}:[/dim] {val}"
+
+        content = Text.from_markup(f"{throughput_line}{extra_lines}")
+
+        inner = Table.grid(expand=True)
+        inner.add_row(tbl)
+        inner.add_row(content)
+
+        return Panel(
+            inner,
+            title="[bold red]HTTP Rate Limit Dashboard[/bold red]",
+            border_style="red",
+            expand=True,
+            padding=(0, 1),
+        )
+
+
+def _format_bytes(n: int) -> str:
+    """Format bytes into human-readable string."""
+    for unit in ("B", "KB", "MB", "GB"):
+        if abs(n) < 1024:
+            return f"[cyan]{n:.1f} {unit}[/cyan]"
+        n /= 1024
+    return f"[cyan]{n:.1f} TB[/cyan]"

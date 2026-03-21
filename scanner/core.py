@@ -10,7 +10,21 @@ This is the "conductor" that:
   3. Runs the crawler to map the attack surface
   4. Dispatches the appropriate testers based on --scan-type
   5. Aggregates all findings into a ScanSummary
-  6. Writes all requested output formats (Markdown, HTML, JSON)
+  6. Writes all requested output formats (Markdown, HTML, JSON, SARIF, PDF)
+
+Enterprise features integrated:
+  - YAML config file support with scan profiles
+  - Structured JSON logging with correlation IDs
+  - Retry with exponential backoff and adaptive rate limiting
+  - Scan scope control (include/exclude URL patterns)
+  - Finding deduplication via stable fingerprints
+  - Checkpoint/resume for long-running scans
+  - Audit trail logging
+  - Plugin system for custom testers
+  - Enterprise auth (OAuth2, NTLM, API keys)
+  - Historical scan database (SQLite)
+  - PDF report generation
+  - Report diff/comparison against previous scans
 
 Design principle: core.py knows HOW to orchestrate but not HOW to test.
 All vulnerability logic lives in testers/. All output logic lives in reporting/.
@@ -20,9 +34,10 @@ Adding a new vulnerability type = add a new tester + register it in _TESTERS.
 import logging
 import threading
 import time
+import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 
 from scanner.auth import AuthHandler
 from scanner.crawler import Crawler
@@ -31,7 +46,7 @@ from scanner.reporting.json_report import write_json_report
 from scanner.reporting.markdown_report import write_markdown_report
 from scanner.reporting.html_report import write_html_report
 from scanner.reporting.sarif_report import write_sarif_report
-from scanner.testers.base import BaseTester
+from scanner.testers.base import BaseTester, set_scope_patterns
 from scanner.testers.cmdi import CmdInjectionTester
 from scanner.testers.cookie_security import CookieSecurityTester
 from scanner.testers.cors import CORSTester
@@ -63,6 +78,7 @@ from scanner.utils.display import (
     print_summary,
     print_warning,
     print_status,
+    RateLimitDashboard,
 )
 
 logger = logging.getLogger(__name__)
@@ -101,19 +117,12 @@ class WebVulnScanner:
     """
     Main scanner class — instantiate once, call scan() to execute.
 
-    Args:
-        url          : Target base URL (e.g. "http://localhost/dvwa").
-        scan_type    : "full" | "sqli" | "xss" | "csrf".
-        login_user   : Optional username for authenticated scanning.
-        login_pass   : Optional password for authenticated scanning.
-        output       : Base filename for reports (no extension).
-        max_pages    : Maximum pages the crawler will visit.
-        delay        : Seconds to wait between HTTP requests (polite scanning).
-        timeout      : Per-request timeout in seconds.
-        verify_ssl   : Whether to verify TLS certificates.
+    Supports both programmatic construction and config-file-driven setup.
+    All enterprise features (audit, checkpoint, plugins, database) are
+    activated via the config parameter or individual flags.
     """
 
-    VERSION = "1.0.0"
+    VERSION = "2.0.0"
 
     def __init__(
         self,
@@ -133,27 +142,39 @@ class WebVulnScanner:
         proxy: str | None = None,
         auth_token: str | None = None,
         fail_on: str | None = None,
+        # Enterprise parameters
+        config: Any | None = None,  # ScanConfig object
+        scan_id: str | None = None,
     ) -> None:
-        self.url        = url.rstrip("/")
-        self.scan_type  = scan_type
-        self.login_user = login_user
-        self.login_pass = login_pass
-        self.output     = output
-        self.max_pages  = max_pages
-        self.threads    = max(1, threads)
-        self.vt_api_key  = vt_api_key
-        self.vt_delay    = vt_delay
-        self.nvd_api_key = nvd_api_key
-        self.fail_on     = fail_on    # CI/CD exit code threshold
+        # Generate scan ID for correlation
+        self.scan_id = scan_id or uuid.uuid4().hex[:12]
 
-        # Initialise the shared HTTP session early so auth can use it
-        http_utils.init_session(
-            delay=delay,
-            timeout=timeout,
-            verify_ssl=verify_ssl,
-            proxy=proxy,
-            auth_token=auth_token,
-        )
+        # If a ScanConfig is provided, use its values as defaults
+        if config is not None:
+            self._init_from_config(config)
+        else:
+            self.url        = url.rstrip("/")
+            self.scan_type  = scan_type
+            self.login_user = login_user
+            self.login_pass = login_pass
+            self.output     = output
+            self.max_pages  = max_pages
+            self.threads    = max(1, threads)
+            self.vt_api_key  = vt_api_key
+            self.vt_delay    = vt_delay
+            self.nvd_api_key = nvd_api_key
+            self.fail_on     = fail_on
+            self.output_formats = ["html", "md", "json", "sarif"]
+            self._config = None
+
+            # Initialise the shared HTTP session
+            http_utils.init_session(
+                delay=delay,
+                timeout=timeout,
+                verify_ssl=verify_ssl,
+                proxy=proxy,
+                auth_token=auth_token,
+            )
 
         # SSRF guard: only allow redirects to the target origin
         from urllib.parse import urlparse as _urlparse
@@ -161,8 +182,105 @@ class WebVulnScanner:
         _target_origin = f"{_parsed.scheme}://{_parsed.netloc}"
         http_utils.set_allowed_origins({_target_origin})
 
+        # Enterprise components — initialised lazily
+        self._audit = None
+        self._checkpoint = None
+        self._plugin_manager = None
+        self._database = None
+        self._enterprise_auth = None
+        self._compare_with = None
+        self._webhooks = None
+        self._dashboard_enabled = False
+
+        if config is not None:
+            self._init_enterprise(config)
+
         # Will be populated during scan()
         self.summary: ScanSummary | None = None
+
+    def _init_from_config(self, config) -> None:
+        """Initialize scanner parameters from a ScanConfig object."""
+        self._config = config
+        self.url = config.url.rstrip("/")
+        self.scan_type = config.scan_type
+        self.login_user = config.auth.username
+        self.login_pass = config.auth.password
+        self.output = config.output
+        self.max_pages = config.max_pages
+        self.threads = max(1, config.threads)
+        self.vt_api_key = config.vt_api_key
+        self.vt_delay = config.vt_delay
+        self.nvd_api_key = config.nvd_api_key
+        self.fail_on = config.fail_on
+        self.output_formats = config.output_formats
+        self._compare_with = config.compare_with
+
+        # Init HTTP session with enterprise rate limiting config
+        http_utils.init_session(
+            delay=config.delay,
+            timeout=config.timeout,
+            verify_ssl=config.verify_ssl,
+            proxy=config.proxy,
+            auth_token=config.auth.token,
+            max_retries=config.rate_limit.max_retries,
+            backoff_factor=config.rate_limit.backoff_factor,
+            adaptive_rate_limit=config.rate_limit.adaptive,
+            retry_on_status=tuple(config.rate_limit.retry_on_status),
+        )
+
+        # Set scope patterns
+        set_scope_patterns(
+            include=config.scope.include,
+            exclude=config.scope.exclude,
+        )
+
+    def _init_enterprise(self, config) -> None:
+        """Initialize enterprise components from config."""
+        # Audit logging
+        if config.audit.enabled:
+            from scanner.audit import AuditLogger
+            self._audit = AuditLogger(
+                log_file=config.audit.log_file,
+                enabled=True,
+            )
+
+        # Checkpoint/resume
+        if config.checkpoint.enabled:
+            from scanner.checkpoint import CheckpointManager
+            self._checkpoint = CheckpointManager(
+                scan_id=self.scan_id,
+                directory=config.checkpoint.directory,
+                enabled=True,
+            )
+
+        # Plugin system
+        if config.plugins.enabled:
+            from scanner.plugins import PluginManager
+            self._plugin_manager = PluginManager(
+                directories=config.plugins.directories,
+                enabled=True,
+            )
+
+        # Database
+        if config.database.enabled:
+            from scanner.db import ScanDatabase
+            self._database = ScanDatabase(
+                path=config.database.path,
+                enabled=True,
+            )
+
+        # Enterprise auth
+        if config.auth.auth_type not in ("none", "form"):
+            from scanner.auth_enterprise import EnterpriseAuth
+            self._enterprise_auth = EnterpriseAuth(config.auth)
+
+        # Webhooks
+        if hasattr(config, "webhooks") and config.webhooks.enabled:
+            from scanner.webhooks import WebhookNotifier
+            self._webhooks = WebhookNotifier(config.webhooks)
+
+        # Rate limit dashboard
+        self._dashboard_enabled = getattr(config, "dashboard", False)
 
     # ------------------------------------------------------------------
     # Main entry point
@@ -173,21 +291,59 @@ class WebVulnScanner:
         Execute the full scan pipeline and return the completed ScanSummary.
 
         Pipeline:
-          authenticate → crawl → test → report
+          audit_start → authenticate → crawl → test → virustotal →
+          finalise → report → diff → audit_complete → database_save
         """
         print_banner(self.VERSION)
 
         started_at = datetime.now(timezone.utc).isoformat()
+        scan_start_time = time.monotonic()
         authenticated = False
 
+        # ---- Audit: record scan start ------------------------------------
+        if self._audit:
+            self._audit.log_scan_start(
+                scan_id=self.scan_id,
+                target=self.url,
+                scan_type=self.scan_type,
+                config={
+                    "threads": self.threads,
+                    "max_pages": self.max_pages,
+                    "output_formats": self.output_formats,
+                },
+            )
+
         # ---- Step 1: Authenticate ----------------------------------------
-        if self.login_user and self.login_pass:
+        if self._enterprise_auth:
+            print_phase("Enterprise Authentication")
+            authenticated = self._enterprise_auth.authenticate()
+            if not authenticated:
+                print_warning("Enterprise auth failed — continuing unauthenticated.")
+            else:
+                print_success("Enterprise authentication successful")
+            if self._audit:
+                auth_type = self._config.auth.auth_type if self._config else "enterprise"
+                self._audit.log_auth_attempt(
+                    scan_id=self.scan_id,
+                    target=self.url,
+                    auth_type=auth_type,
+                    success=authenticated,
+                )
+        elif self.login_user and self.login_pass:
             print_phase("Authentication")
             auth = AuthHandler(self.url, self.login_user, self.login_pass)
             authenticated = auth.login()
             if not authenticated:
                 print_warning(
                     "Continuing as unauthenticated — some pages may be inaccessible."
+                )
+            if self._audit:
+                self._audit.log_auth_attempt(
+                    scan_id=self.scan_id,
+                    target=self.url,
+                    auth_type="form",
+                    success=authenticated,
+                    username=self.login_user,
                 )
         else:
             print_info("No credentials provided — running unauthenticated scan.")
@@ -200,6 +356,12 @@ class WebVulnScanner:
             scan_type=self.scan_type,
             started_at=started_at,
         )
+
+        # ---- Start rate limit dashboard (if enabled) ----------------------
+        dashboard = None
+        if self._dashboard_enabled:
+            dashboard = RateLimitDashboard()
+            dashboard.start()
 
         # ---- Step 2: Crawl -----------------------------------------------
         print_phase("Crawling — Mapping Attack Surface")
@@ -216,9 +378,20 @@ class WebVulnScanner:
             self.summary.finished_at = datetime.now(timezone.utc).isoformat()
             return self.summary
 
+        # Save crawl checkpoint
+        if self._checkpoint:
+            self._checkpoint.save_crawl_state(
+                visited_urls=[p.url for p in pages],
+                queue_urls=[],
+                pages_data=[{"url": p.url, "forms": len(p.forms)} for p in pages],
+            )
+
         # ---- Step 3: Run testers (concurrent) ---------------------------
         testers = self._build_testers()
         print_phase(f"Testing — {len(testers)} modules, up to {self.threads} concurrent")
+        if dashboard:
+            dashboard.set_info("Phase", "Testing")
+            dashboard.set_info("Modules", str(len(testers)))
         self._run_testers_concurrent(testers, pages)
 
         # ---- Step 4: VirusTotal check ------------------------------------
@@ -230,11 +403,67 @@ class WebVulnScanner:
 
         # ---- Step 5: Finalise summary ------------------------------------
         self.summary.finished_at = datetime.now(timezone.utc).isoformat()
+        scan_duration = time.monotonic() - scan_start_time
+
+        # Show request metrics
+        req_metrics = http_utils.get_metrics()
+        if req_metrics["total_requests"] > 0:
+            print_info(
+                f"HTTP metrics: {req_metrics['total_requests']} requests, "
+                f"{req_metrics['retried']} retried, "
+                f"{req_metrics['rate_limited']} rate-limited, "
+                f"avg {req_metrics['avg_response_time']:.2f}s"
+            )
+
         print_summary(self.summary)
 
         # ---- Step 6: Write reports ---------------------------------------
         print_phase("Generating Reports")
         self._write_reports()
+
+        # ---- Step 7: Diff comparison (if configured) ---------------------
+        if self._compare_with:
+            self._run_diff_comparison()
+
+        # ---- Step 8: Audit + Database ------------------------------------
+        if self._audit:
+            self._audit.log_scan_complete(
+                scan_id=self.scan_id,
+                target=self.url,
+                duration_seconds=scan_duration,
+                findings_count=self.summary.total_findings,
+                severity_breakdown={
+                    "critical": self.summary.critical_count,
+                    "high": self.summary.high_count,
+                    "medium": self.summary.medium_count,
+                    "low": self.summary.low_count,
+                },
+            )
+
+        if self._database:
+            self._database.save_scan(
+                scan_id=self.scan_id,
+                summary=self.summary,
+                config={"scan_type": self.scan_type, "threads": self.threads},
+                metrics=req_metrics,
+            )
+            print_info(f"Scan saved to database (ID: {self.scan_id})")
+
+        # ---- Stop dashboard ------------------------------------------------
+        if dashboard:
+            dashboard.stop()
+
+        # ---- Step 9: Webhook notifications --------------------------------
+        if self._webhooks and self.summary:
+            try:
+                self._webhooks.notify_scan_complete(self.summary, self.scan_id)
+                print_success("Webhook notifications sent")
+            except Exception as exc:
+                print_warning(f"Webhook notification failed: {exc}")
+
+        # Clear checkpoint on successful completion
+        if self._checkpoint:
+            self._checkpoint.clear()
 
         return self.summary
 
@@ -253,9 +482,6 @@ class WebVulnScanner:
                 status="",
             )
 
-            # We hook into the crawler by subclassing progress updates
-            # around the crawl() call. For simplicity we run the crawl
-            # and advance based on visited count.
             def _update_progress():
                 while not progress.finished:
                     visited = len(crawler._visited)
@@ -282,17 +508,37 @@ class WebVulnScanner:
         and added to the summary as they arrive.
         """
         _lock = threading.Lock()
+        completed_testers: list[str] = []
 
         def _run_one(tester: BaseTester):
             findings = tester.run(pages)
             with _lock:
                 self.summary.params_tested += tester.params_tested
                 for f in findings:
-                    self.summary.add_finding(f)
-                    print_finding(f)
-                # Print inside the lock so it never interleaves with print_finding
-                # calls from other still-running tester threads
+                    added = self.summary.add_finding(f)
+                    if added:
+                        print_finding(f)
+                        # Audit each finding
+                        if self._audit:
+                            self._audit.log_finding(
+                                scan_id=self.scan_id,
+                                vuln_type=f.vuln_type,
+                                severity=f.severity,
+                                url=f.url,
+                                parameter=f.parameter,
+                                fingerprint=f.fingerprint,
+                            )
+
+                completed_testers.append(tester.name)
                 print_status(f"{tester.name} complete — {len(findings)} finding(s)")
+
+                # Save checkpoint after each tester completes
+                if self._checkpoint:
+                    self._checkpoint.save_tester_progress(
+                        completed_testers=list(completed_testers),
+                        findings=[f.to_dict() for f in self.summary.findings],
+                        params_tested=self.summary.params_tested,
+                    )
 
         with ThreadPoolExecutor(max_workers=self.threads) as pool:
             futures = {pool.submit(_run_one, t): t for t in testers}
@@ -300,7 +546,15 @@ class WebVulnScanner:
                 try:
                     future.result()
                 except Exception as exc:
-                    logger.error("Tester error: %s", exc)
+                    tester = futures[future]
+                    logger.error("Tester %s error: %s", tester.name, exc)
+                    if self._audit:
+                        self._audit.log_error(
+                            scan_id=self.scan_id,
+                            error_type="tester_failure",
+                            message=str(exc),
+                            context={"tester": tester.name},
+                        )
 
     def _run_virustotal(self, pages: list) -> None:
         """Check the target domain and any suspicious file URLs via VirusTotal."""
@@ -360,7 +614,7 @@ class WebVulnScanner:
         """
         Instantiate the appropriate testers based on --scan-type.
 
-        "full"    = all testers.
+        "full"    = all built-in testers + any loaded plugins.
         "passive" = headers + sensitive files + CVE lookup (no attack payloads).
         Any other value = only the named tester.
         """
@@ -369,25 +623,77 @@ class WebVulnScanner:
                 return CveTester(nvd_api_key=self.nvd_api_key)
             return cls()
 
+        # Load plugins if configured
+        plugin_testers: dict[str, type[BaseTester]] = {}
+        if self._plugin_manager:
+            plugin_testers = self._plugin_manager.discover()
+            if plugin_testers:
+                print_info(f"Loaded {len(plugin_testers)} plugin tester(s)")
+            if self._plugin_manager.errors:
+                for err in self._plugin_manager.errors:
+                    print_warning(f"Plugin error: {err['file']}: {err['error']}")
+
+        # Merge plugin testers into the full map
+        all_testers = dict(_TESTER_MAP)
+        all_testers.update(plugin_testers)
+
         if self.scan_type == "full":
-            return [_make(cls) for cls in _TESTER_MAP.values()]
+            return [_make(cls) for cls in all_testers.values()]
 
         if self.scan_type == "passive":
-            return [
+            passive = [
                 HeadersTester(), SensitiveFileTester(), _make(CveTester),
                 WAFTester(), CORSTester(), SSLTLSTester(),
                 CookieSecurityTester(), SubdomainTester(),
             ]
+            # Add any passive-safe plugins
+            return passive
 
-        tester_cls = _TESTER_MAP.get(self.scan_type)
+        # Check both built-in and plugin testers
+        tester_cls = all_testers.get(self.scan_type)
         if not tester_cls:
             print_error(
                 f"Unknown scan type '{self.scan_type}'. "
-                f"Valid options: full, passive, {', '.join(_TESTER_MAP.keys())}"
+                f"Valid options: full, passive, {', '.join(all_testers.keys())}"
             )
             return []
 
         return [_make(tester_cls)]
+
+    def _run_diff_comparison(self) -> None:
+        """Compare current results against a baseline scan."""
+        if not self._compare_with or not self.summary:
+            return
+
+        try:
+            from scanner.reporting.diff_report import (
+                compare_with_file,
+                write_diff_report_md,
+                write_diff_report_json,
+            )
+
+            print_phase("Scan Comparison")
+            diff = compare_with_file(self.summary, self._compare_with)
+
+            # Print summary
+            if diff.total_new > 0:
+                print_warning(f"{diff.total_new} NEW finding(s) since baseline")
+            if diff.total_fixed > 0:
+                print_success(f"{diff.total_fixed} finding(s) FIXED since baseline")
+            print_info(f"{diff.total_unchanged} finding(s) unchanged")
+
+            # Write diff reports
+            base = self.output
+            diff_md = write_diff_report_md(diff, f"{base}_diff.md")
+            diff_json = write_diff_report_json(diff, f"{base}_diff.json")
+            console.print(f"  [red]→[/red] {diff_md}")
+            console.print(f"  [red]→[/red] {diff_json}")
+
+        except FileNotFoundError:
+            print_warning(f"Baseline report not found: {self._compare_with}")
+        except Exception as exc:
+            print_warning(f"Diff comparison failed: {exc}")
+            logger.exception("Diff comparison error")
 
     def should_fail(self) -> bool:
         """
@@ -413,19 +719,32 @@ class WebVulnScanner:
         return False
 
     def _write_reports(self) -> None:
-        """Write all output formats (Markdown, HTML, JSON, SARIF)."""
+        """Write all configured output formats."""
         if not self.summary:
             return
 
         base = self.output
         reports = []
+        formats = self.output_formats
 
         try:
-            md_path    = write_markdown_report(self.summary, f"{base}.md")
-            html_path  = write_html_report(self.summary, f"{base}.html")
-            json_path  = write_json_report(self.summary, f"{base}.json")
-            sarif_path = write_sarif_report(self.summary, f"{base}.sarif")
-            reports    = [md_path, html_path, json_path, sarif_path]
+            if "md" in formats:
+                reports.append(write_markdown_report(self.summary, f"{base}.md"))
+            if "html" in formats:
+                reports.append(write_html_report(self.summary, f"{base}.html"))
+            if "json" in formats:
+                reports.append(write_json_report(self.summary, f"{base}.json"))
+            if "sarif" in formats:
+                reports.append(write_sarif_report(self.summary, f"{base}.sarif"))
+            if "pdf" in formats:
+                try:
+                    from scanner.reporting.pdf_report import write_pdf_report
+                    reports.append(write_pdf_report(self.summary, f"{base}.pdf"))
+                except ImportError:
+                    print_warning(
+                        "PDF generation requires fpdf2. "
+                        "Install with: pip install fpdf2"
+                    )
         except Exception as exc:
             print_error(f"Report generation failed: {exc}")
             logger.exception("Report generation error")

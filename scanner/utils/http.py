@@ -2,7 +2,7 @@ from __future__ import annotations
 """
 scanner/utils/http.py
 ----------------------
-Shared HTTP session manager.
+Shared HTTP session manager with enterprise-grade resilience.
 
 Responsibilities:
   - Maintain a single requests.Session across the entire scan (preserves
@@ -12,6 +12,10 @@ Responsibilities:
   - SSRF guard: redirect destinations are validated against allowed origins
   - Response size cap (MAX_RESPONSE_BYTES) prevents OOM from malicious targets
   - Set a custom User-Agent so the target can identify scanner traffic in logs
+  - Retry with exponential backoff on transient failures
+  - Adaptive rate limiting: auto back-off on 429/503 responses
+  - Token bucket rate limiter for smooth request distribution
+  - Request/response metrics tracking
 """
 
 import ipaddress
@@ -60,6 +64,130 @@ _PRIVATE_NETWORKS = [
     ipaddress.ip_network("fc00::/7"),
     ipaddress.ip_network("fe80::/10"),
 ]
+
+
+# ---------------------------------------------------------------------------
+# Request metrics — thread-safe counters
+# ---------------------------------------------------------------------------
+
+class RequestMetrics:
+    """Thread-safe request/response metrics for observability."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self.total_requests = 0
+        self.successful_requests = 0
+        self.failed_requests = 0
+        self.retried_requests = 0
+        self.rate_limited_count = 0
+        self.total_bytes_received = 0
+        self.total_response_time = 0.0
+
+    def record_request(self, success: bool, bytes_received: int = 0,
+                       response_time: float = 0.0, retried: bool = False,
+                       rate_limited: bool = False) -> None:
+        with self._lock:
+            self.total_requests += 1
+            if success:
+                self.successful_requests += 1
+            else:
+                self.failed_requests += 1
+            if retried:
+                self.retried_requests += 1
+            if rate_limited:
+                self.rate_limited_count += 1
+            self.total_bytes_received += bytes_received
+            self.total_response_time += response_time
+
+    def snapshot(self) -> dict:
+        with self._lock:
+            avg_time = (
+                self.total_response_time / self.total_requests
+                if self.total_requests > 0 else 0.0
+            )
+            return {
+                "total_requests": self.total_requests,
+                "successful": self.successful_requests,
+                "failed": self.failed_requests,
+                "retried": self.retried_requests,
+                "rate_limited": self.rate_limited_count,
+                "total_bytes": self.total_bytes_received,
+                "avg_response_time": round(avg_time, 3),
+            }
+
+
+metrics = RequestMetrics()
+
+
+# ---------------------------------------------------------------------------
+# Token bucket rate limiter
+# ---------------------------------------------------------------------------
+
+class TokenBucket:
+    """
+    Token bucket algorithm for smooth rate limiting.
+
+    Allows bursts up to `capacity` requests, then throttles to
+    `fill_rate` requests per second.
+    """
+
+    def __init__(self, capacity: float, fill_rate: float) -> None:
+        self.capacity = capacity
+        self.fill_rate = fill_rate
+        self._tokens = capacity
+        self._last_fill = time.monotonic()
+        self._lock = threading.Lock()
+
+    def acquire(self, timeout: float = 30.0) -> bool:
+        """
+        Block until a token is available or timeout is reached.
+        Returns True if a token was acquired, False on timeout.
+        """
+        deadline = time.monotonic() + timeout
+        while True:
+            with self._lock:
+                self._refill()
+                if self._tokens >= 1.0:
+                    self._tokens -= 1.0
+                    return True
+            if time.monotonic() >= deadline:
+                return False
+            # Sleep for time until next token
+            with self._lock:
+                wait = (1.0 - self._tokens) / self.fill_rate
+            time.sleep(min(wait, 0.1))
+
+    def _refill(self) -> None:
+        now = time.monotonic()
+        elapsed = now - self._last_fill
+        self._tokens = min(self.capacity, self._tokens + elapsed * self.fill_rate)
+        self._last_fill = now
+
+
+# ---------------------------------------------------------------------------
+# Retry configuration
+# ---------------------------------------------------------------------------
+
+class RetryConfig:
+    """Configuration for retry behaviour."""
+
+    def __init__(
+        self,
+        max_retries: int = 3,
+        backoff_factor: float = 2.0,
+        max_backoff: float = 60.0,
+        retry_on_status: tuple[int, ...] = (429, 500, 502, 503, 504),
+        adaptive: bool = True,
+    ) -> None:
+        self.max_retries = max_retries
+        self.backoff_factor = backoff_factor
+        self.max_backoff = max_backoff
+        self.retry_on_status = retry_on_status
+        self.adaptive = adaptive
+
+
+_retry_config = RetryConfig()
+_rate_limiter: Optional[TokenBucket] = None
 
 
 def _is_private_ip(hostname: str) -> bool:
@@ -120,6 +248,10 @@ def init_session(
     verify_ssl: bool = True,
     proxy: str | None = None,
     auth_token: str | None = None,
+    max_retries: int = 3,
+    backoff_factor: float = 2.0,
+    adaptive_rate_limit: bool = True,
+    retry_on_status: tuple[int, ...] | None = None,
 ) -> Session:
     """
     Initialise (or re-initialise) the global session.
@@ -127,20 +259,36 @@ def init_session(
     Call this once from WebVulnScanner.__init__() before any testers run.
 
     Args:
-        delay      : Seconds to sleep between requests (polite scanning).
-        timeout    : Per-request timeout in seconds.
-        verify_ssl : Set False only when testing self-signed certs in labs.
-        user_agent : Custom UA string injected into every request header.
-        proxy      : HTTP/SOCKS proxy URL (e.g. http://127.0.0.1:8080 for Burp Suite).
-        auth_token : Bearer/API token for token-based authentication.
+        delay               : Seconds to sleep between requests (polite scanning).
+        timeout             : Per-request timeout in seconds.
+        verify_ssl          : Set False only when testing self-signed certs in labs.
+        user_agent          : Custom UA string injected into every request header.
+        proxy               : HTTP/SOCKS proxy URL (e.g. http://127.0.0.1:8080 for Burp Suite).
+        auth_token          : Bearer/API token for token-based authentication.
+        max_retries         : Maximum retry attempts for transient failures.
+        backoff_factor      : Multiplier for exponential backoff between retries.
+        adaptive_rate_limit : Auto back-off when receiving 429/503 responses.
+        retry_on_status     : HTTP status codes that trigger retry.
 
     Returns:
         The configured requests.Session instance.
     """
-    global _session, _delay, _timeout
+    global _session, _delay, _timeout, _retry_config, _rate_limiter
 
     _delay   = delay
     _timeout = timeout
+
+    # Configure retry behaviour
+    _retry_config = RetryConfig(
+        max_retries=max_retries,
+        backoff_factor=backoff_factor,
+        retry_on_status=retry_on_status or (429, 500, 502, 503, 504),
+        adaptive=adaptive_rate_limit,
+    )
+
+    # Token bucket: allow burst of 5 requests, then 1/delay per second
+    fill_rate = 1.0 / max(delay, 0.01)
+    _rate_limiter = TokenBucket(capacity=min(5.0, fill_rate * 2), fill_rate=fill_rate)
 
     _session = requests.Session()
     _session.headers.update({
@@ -168,7 +316,10 @@ def init_session(
         urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
         _session.verify = False
 
-    logger.debug("HTTP session initialised (delay=%.2fs, timeout=%ds)", delay, timeout)
+    logger.debug(
+        "HTTP session initialised (delay=%.2fs, timeout=%ds, retries=%d, adaptive=%s)",
+        delay, timeout, max_retries, adaptive_rate_limit,
+    )
     return _session
 
 
@@ -189,8 +340,201 @@ def get_session() -> Session:
     return _session
 
 
+def get_metrics() -> dict:
+    """Return a snapshot of request metrics."""
+    return metrics.snapshot()
+
+
 # ---------------------------------------------------------------------------
-# Rate-limited, thread-safe, size-capped, SSRF-guarded request helpers
+# Adaptive delay tracking
+# ---------------------------------------------------------------------------
+
+_adaptive_delay: float = 0.0  # Additional delay from 429/503 responses
+_adaptive_lock = threading.Lock()
+
+
+def _apply_adaptive_backoff(resp: Response) -> None:
+    """Increase delay when receiving rate-limit or server-overload responses."""
+    global _adaptive_delay
+    if not _retry_config.adaptive:
+        return
+
+    if resp.status_code == 429:
+        # Check for Retry-After header
+        retry_after = resp.headers.get("Retry-After")
+        if retry_after:
+            try:
+                wait = float(retry_after)
+            except ValueError:
+                wait = _delay * 2
+        else:
+            wait = _delay * 2
+
+        with _adaptive_lock:
+            _adaptive_delay = min(wait, _retry_config.max_backoff)
+            logger.info(
+                "Rate limited (429) — adaptive delay set to %.1fs",
+                _adaptive_delay,
+            )
+            metrics.record_request(success=True, rate_limited=True)
+
+    elif resp.status_code in (503, 502):
+        with _adaptive_lock:
+            _adaptive_delay = min(
+                max(_adaptive_delay * 1.5, _delay),
+                _retry_config.max_backoff,
+            )
+            logger.info(
+                "Server overloaded (%d) — adaptive delay set to %.1fs",
+                resp.status_code, _adaptive_delay,
+            )
+
+    elif resp.status_code < 400:
+        # Successful response — gradually reduce adaptive delay
+        with _adaptive_lock:
+            if _adaptive_delay > 0:
+                _adaptive_delay = max(0, _adaptive_delay * 0.8 - 0.1)
+
+
+def _get_effective_delay() -> float:
+    """Get the current effective delay including adaptive backoff."""
+    with _adaptive_lock:
+        return _delay + _adaptive_delay
+
+
+# ---------------------------------------------------------------------------
+# Retry wrapper
+# ---------------------------------------------------------------------------
+
+def _request_with_retry(
+    method: str,
+    url: str,
+    data: dict | None = None,
+    **kwargs,
+) -> Response:
+    """
+    Execute an HTTP request with retry logic and adaptive rate limiting.
+
+    Retries on:
+      - Connection errors (ConnectionError, Timeout)
+      - Configured status codes (429, 500, 502, 503, 504 by default)
+
+    Uses exponential backoff with jitter between retries.
+    """
+    kwargs.setdefault("timeout", _timeout)
+    kwargs.setdefault("allow_redirects", True)
+
+    last_exc = None
+    retried = False
+
+    for attempt in range(_retry_config.max_retries + 1):
+        # Rate limiting
+        effective_delay = _get_effective_delay()
+        if _rate_limiter:
+            _rate_limiter.acquire()
+        elif effective_delay > 0:
+            time.sleep(effective_delay)
+
+        start_time = time.monotonic()
+        try:
+            with _lock:
+                session = get_session()
+                if method == "GET":
+                    resp = session.get(url, **kwargs)
+                else:
+                    resp = session.post(url, data=data, **kwargs)
+
+            elapsed = time.monotonic() - start_time
+
+            # Check if we should retry on this status code
+            if resp.status_code in _retry_config.retry_on_status:
+                _apply_adaptive_backoff(resp)
+
+                if attempt < _retry_config.max_retries:
+                    wait = min(
+                        _retry_config.backoff_factor ** attempt,
+                        _retry_config.max_backoff,
+                    )
+                    # Respect Retry-After header for 429
+                    if resp.status_code == 429:
+                        retry_after = resp.headers.get("Retry-After")
+                        if retry_after:
+                            try:
+                                wait = max(wait, float(retry_after))
+                            except ValueError:
+                                pass
+
+                    logger.debug(
+                        "%s %s → %d (attempt %d/%d, retrying in %.1fs)",
+                        method, url, resp.status_code,
+                        attempt + 1, _retry_config.max_retries + 1, wait,
+                    )
+                    retried = True
+                    time.sleep(wait)
+                    continue
+
+            # Successful or non-retryable response
+            _apply_adaptive_backoff(resp)
+            _check_redirect(resp)
+            _enforce_size_limit(resp)
+
+            metrics.record_request(
+                success=True,
+                bytes_received=len(resp.content),
+                response_time=elapsed,
+                retried=retried,
+            )
+
+            logger.debug(
+                "%s %s → %d (%d bytes, %.2fs)",
+                method, url, resp.status_code, len(resp.content), elapsed,
+            )
+            return resp
+
+        except (requests.ConnectionError, requests.Timeout) as exc:
+            last_exc = exc
+            elapsed = time.monotonic() - start_time
+
+            if attempt < _retry_config.max_retries:
+                wait = min(
+                    _retry_config.backoff_factor ** attempt,
+                    _retry_config.max_backoff,
+                )
+                logger.debug(
+                    "%s %s failed (attempt %d/%d): %s — retrying in %.1fs",
+                    method, url, attempt + 1, _retry_config.max_retries + 1,
+                    exc, wait,
+                )
+                retried = True
+                time.sleep(wait)
+                continue
+
+            metrics.record_request(
+                success=False, response_time=elapsed, retried=retried,
+            )
+            logger.warning("%s %s failed after %d attempts: %s",
+                           method, url, attempt + 1, exc)
+            raise
+
+        except requests.RequestException as exc:
+            # Non-retryable request error
+            metrics.record_request(
+                success=False,
+                response_time=time.monotonic() - start_time,
+            )
+            logger.warning("%s %s failed: %s", method, url, exc)
+            raise
+
+    # Exhausted retries on bad status code — return last response
+    metrics.record_request(
+        success=False, retried=True,
+        response_time=time.monotonic() - start_time,
+    )
+    return resp  # type: ignore[possibly-undefined]
+
+
+# ---------------------------------------------------------------------------
+# Public request helpers (backwards-compatible API)
 # ---------------------------------------------------------------------------
 
 _delay:   float = DEFAULT_DELAY
@@ -198,47 +542,28 @@ _timeout: int   = DEFAULT_TIMEOUT
 
 
 def get(url: str, **kwargs) -> Response:
-    """Rate-limited, thread-safe GET with SSRF guard and size cap."""
-    time.sleep(_delay)
-    kwargs.setdefault("timeout", _timeout)
-    kwargs.setdefault("allow_redirects", True)
-    with _lock:
-        session = get_session()
-        try:
-            resp = session.get(url, **kwargs)
-        except requests.RequestException as exc:
-            logger.warning("GET %s failed: %s", url, exc)
-            raise
-    _check_redirect(resp)
-    _enforce_size_limit(resp)
-    logger.debug("GET %s → %d (%d bytes)", url, resp.status_code, len(resp.content))
-    return resp
+    """Rate-limited, thread-safe GET with retry, SSRF guard, and size cap."""
+    return _request_with_retry("GET", url, **kwargs)
 
 
 def post(url: str, data: dict | None = None, **kwargs) -> Response:
-    """Rate-limited, thread-safe POST with SSRF guard and size cap."""
-    time.sleep(_delay)
-    kwargs.setdefault("timeout", _timeout)
-    kwargs.setdefault("allow_redirects", True)
-    with _lock:
-        session = get_session()
-        try:
-            resp = session.post(url, data=data, **kwargs)
-        except requests.RequestException as exc:
-            logger.warning("POST %s failed: %s", url, exc)
-            raise
-    _check_redirect(resp)
-    _enforce_size_limit(resp)
-    logger.debug("POST %s → %d (%d bytes)", url, resp.status_code, len(resp.content))
-    return resp
+    """Rate-limited, thread-safe POST with retry, SSRF guard, and size cap."""
+    return _request_with_retry("POST", url, data=data, **kwargs)
 
 
 def timed_get(url: str, **kwargs) -> tuple[Response, float]:
     """
     GET that also returns the elapsed wall-clock time in seconds.
     Used by the time-based blind SQL injection tester.
+
+    Note: Retries are disabled for timed requests to preserve timing accuracy.
     """
-    time.sleep(_delay)
+    effective_delay = _get_effective_delay()
+    if _rate_limiter:
+        _rate_limiter.acquire()
+    elif effective_delay > 0:
+        time.sleep(effective_delay)
+
     kwargs.setdefault("timeout", max(_timeout, 35))
     kwargs.setdefault("allow_redirects", True)
     with _lock:
@@ -248,13 +573,22 @@ def timed_get(url: str, **kwargs) -> tuple[Response, float]:
         elapsed = time.monotonic() - start
     _check_redirect(resp)
     _enforce_size_limit(resp)
+    metrics.record_request(
+        success=True, bytes_received=len(resp.content), response_time=elapsed,
+    )
     logger.debug("Timed GET %s → %.2fs", url, elapsed)
     return resp, elapsed
 
 
 def timed_post(url: str, data: dict | None = None, **kwargs) -> tuple[Response, float]:
-    """POST that also returns elapsed wall-clock time."""
-    time.sleep(_delay)
+    """POST that also returns elapsed wall-clock time.
+    Retries disabled to preserve timing accuracy."""
+    effective_delay = _get_effective_delay()
+    if _rate_limiter:
+        _rate_limiter.acquire()
+    elif effective_delay > 0:
+        time.sleep(effective_delay)
+
     kwargs.setdefault("timeout", max(_timeout, 35))
     kwargs.setdefault("allow_redirects", True)
     with _lock:
@@ -264,5 +598,8 @@ def timed_post(url: str, data: dict | None = None, **kwargs) -> tuple[Response, 
         elapsed = time.monotonic() - start
     _check_redirect(resp)
     _enforce_size_limit(resp)
+    metrics.record_request(
+        success=True, bytes_received=len(resp.content), response_time=elapsed,
+    )
     logger.debug("Timed POST %s → %.2fs", url, elapsed)
     return resp, elapsed

@@ -33,3 +33,14 @@ Desktop.ini
 .env
 *.key
 *.pem
+
+# W3BSP1D3R runtime data
+.w3bsp1d3r/
+*.db
+*.log
+
+# pytest
+.pytest_cache/
+
+# Claude Code memory (local only)
+.claude/

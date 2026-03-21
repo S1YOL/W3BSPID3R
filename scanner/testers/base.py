@@ -14,6 +14,7 @@ Design pattern: Template Method
   means creating a new class that inherits from BaseTester and implements run().
 """
 
+import fnmatch
 import logging
 from abc import ABC, abstractmethod
 from urllib.parse import urlencode, urlparse, parse_qs, urlunparse
@@ -22,6 +23,32 @@ from scanner.crawler import CrawledForm, CrawledPage
 from scanner.reporting.models import Finding
 
 logger = logging.getLogger(__name__)
+
+# Module-level scope patterns — set by the scanner core before testers run
+_scope_include: list[str] = []
+_scope_exclude: list[str] = []
+
+
+def set_scope_patterns(include: list[str], exclude: list[str]) -> None:
+    """Configure URL scope patterns (fnmatch globs) for all testers."""
+    global _scope_include, _scope_exclude
+    _scope_include = include
+    _scope_exclude = exclude
+
+
+def is_url_in_scope(url: str) -> bool:
+    """Check if a URL matches scope include/exclude patterns."""
+    # If no include patterns, everything is in scope
+    if _scope_include:
+        if not any(fnmatch.fnmatch(url, pat) for pat in _scope_include):
+            return False
+
+    # Check exclusions
+    if _scope_exclude:
+        if any(fnmatch.fnmatch(url, pat) for pat in _scope_exclude):
+            return False
+
+    return True
 
 
 class BaseTester(ABC):
@@ -146,8 +173,23 @@ class BaseTester(ABC):
         end   = min(len(text), idx + window)
         return text[start:end].strip()
 
+    def _is_in_scope(self, url: str) -> bool:
+        """Check if a URL is within the configured scan scope."""
+        return is_url_in_scope(url)
+
+    def _filter_pages_by_scope(self, pages: list[CrawledPage]) -> list[CrawledPage]:
+        """Filter pages to only those within the configured scope."""
+        if not _scope_include and not _scope_exclude:
+            return pages
+        return [p for p in pages if self._is_in_scope(p.url)]
+
     def _log_finding(self, finding: Finding) -> None:
-        """Record a finding and log it at WARNING level."""
+        """Record a finding and log it at WARNING level.
+        Skips findings for out-of-scope URLs."""
+        if not self._is_in_scope(finding.url):
+            logger.debug("Skipping out-of-scope finding: %s", finding.url)
+            return
+
         self.findings.append(finding)
         logger.warning(
             "[%s] %s found at %s param=%s",
