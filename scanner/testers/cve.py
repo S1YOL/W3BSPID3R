@@ -18,7 +18,7 @@ NVD API docs : https://nvd.nist.gov/developers/vulnerabilities
 Rate limits  : 5 req / 30 s without key  |  50 req / 30 s with key
                Pass --nvd-api-key to raise the limit.
 
-OWASP ref    : A06:2021 Vulnerable and Outdated Components
+OWASP ref    : A03:2025 Software Supply Chain Failures
 """
 
 import re

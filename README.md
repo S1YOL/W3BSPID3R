@@ -47,7 +47,7 @@
 | **Webhook Notifications** | Slack, Teams, Discord, and custom webhook alerts |
 | **Rate Limit Dashboard** | Live terminal metrics via `--dashboard` |
 | **Async HTTP** | High-throughput scanning with `httpx` |
-| **OWASP Top 10 Mapping** | Every finding mapped to OWASP 2021 categories |
+| **OWASP Top 10 Mapping** | Every finding mapped to OWASP 2025 categories |
 | **Jira / ServiceNow** | Auto-create tickets from findings |
 | **Email Notifications** | SMTP scan reports with HTML formatting |
 | **Scan Scheduler** | Cron-based recurring scans |

@@ -20,7 +20,7 @@ Detection strategy:
 
 Note: This is passive DNS enumeration only — no active exploitation.
 
-OWASP ref: A05:2021 Security Misconfiguration
+OWASP ref: A02:2025 Security Misconfiguration
 """
 
 import logging

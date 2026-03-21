@@ -26,32 +26,32 @@ from scanner.reporting.models import (
 # ---------------------------------------------------------------------------
 
 class TestOWASPMapping(unittest.TestCase):
-    """Test OWASP Top 10 (2021) mapping for all vulnerability types."""
+    """Test OWASP Top 10 (2025) mapping for all vulnerability types."""
 
-    def test_sqli_maps_to_a03(self):
-        assert get_owasp_category(VulnType.SQLI_ERROR) == {"id": "A03:2021", "name": "Injection"}
-        assert get_owasp_category(VulnType.SQLI_BOOLEAN) == {"id": "A03:2021", "name": "Injection"}
-        assert get_owasp_category(VulnType.SQLI_TIME) == {"id": "A03:2021", "name": "Injection"}
-        assert get_owasp_category(VulnType.SQLI_UNION) == {"id": "A03:2021", "name": "Injection"}
+    def test_sqli_maps_to_a05(self):
+        assert get_owasp_category(VulnType.SQLI_ERROR) == {"id": "A05:2025", "name": "Injection"}
+        assert get_owasp_category(VulnType.SQLI_BOOLEAN) == {"id": "A05:2025", "name": "Injection"}
+        assert get_owasp_category(VulnType.SQLI_TIME) == {"id": "A05:2025", "name": "Injection"}
+        assert get_owasp_category(VulnType.SQLI_UNION) == {"id": "A05:2025", "name": "Injection"}
 
-    def test_xss_maps_to_a03(self):
-        assert get_owasp_category(VulnType.XSS_REFLECTED)["id"] == "A03:2021"
-        assert get_owasp_category(VulnType.XSS_STORED)["id"] == "A03:2021"
+    def test_xss_maps_to_a05(self):
+        assert get_owasp_category(VulnType.XSS_REFLECTED)["id"] == "A05:2025"
+        assert get_owasp_category(VulnType.XSS_STORED)["id"] == "A05:2025"
 
-    def test_cmdi_maps_to_a03(self):
-        assert get_owasp_category(VulnType.CMD_INJECTION)["id"] == "A03:2021"
+    def test_cmdi_maps_to_a05(self):
+        assert get_owasp_category(VulnType.CMD_INJECTION)["id"] == "A05:2025"
 
     def test_path_traversal_maps_to_a01(self):
-        assert get_owasp_category(VulnType.PATH_TRAVERSAL)["id"] == "A01:2021"
+        assert get_owasp_category(VulnType.PATH_TRAVERSAL)["id"] == "A01:2025"
 
-    def test_csrf_maps_to_a08(self):
-        assert get_owasp_category(VulnType.CSRF)["id"] == "A08:2021"
+    def test_csrf_maps_to_a07(self):
+        assert get_owasp_category(VulnType.CSRF)["id"] == "A07:2025"
 
-    def test_ssl_maps_to_a02(self):
-        assert get_owasp_category(VulnType.SSL_TLS)["id"] == "A02:2021"
+    def test_ssl_maps_to_a04(self):
+        assert get_owasp_category(VulnType.SSL_TLS)["id"] == "A04:2025"
 
-    def test_headers_maps_to_a05(self):
-        assert get_owasp_category(VulnType.SECURITY_HEADER)["id"] == "A05:2021"
+    def test_headers_maps_to_a02(self):
+        assert get_owasp_category(VulnType.SECURITY_HEADER)["id"] == "A02:2025"
 
     def test_unknown_returns_none(self):
         assert get_owasp_category("Made Up Vuln Type") is None
@@ -61,7 +61,7 @@ class TestOWASPMapping(unittest.TestCase):
                     url="http://t.com", parameter="id", method="GET",
                     payload="x", evidence="y", remediation="z")
         d = f.to_dict()
-        assert d["owasp"] == {"id": "A03:2021", "name": "Injection"}
+        assert d["owasp"] == {"id": "A05:2025", "name": "Injection"}
 
     def test_all_vuln_types_mapped(self):
         """Verify every VulnType constant has an OWASP mapping."""

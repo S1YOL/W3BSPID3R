@@ -21,7 +21,7 @@ Encoding variants tested:
   - Windows backslash       ..\\..\\..\\windows\\win.ini
   - URL-encoded backslash   ..%5C..%5Cwindows%5Cwin.ini
 
-OWASP ref: A01:2021 Broken Access Control, CWE-22
+OWASP ref: A01:2025 Broken Access Control, CWE-22
 """
 
 import logging

@@ -4,7 +4,7 @@ scanner/testers/csrf.py
 ------------------------
 Cross-Site Request Forgery (CSRF) vulnerability tester.
 
-Security concept (OWASP A01:2021 – Broken Access Control / CSRF):
+Security concept (OWASP A07:2025 – Authentication Failures):
   CSRF tricks an authenticated user's browser into making unwanted requests
   to a web application. Because the browser automatically sends session
   cookies, the server cannot distinguish a legitimate request from a forged

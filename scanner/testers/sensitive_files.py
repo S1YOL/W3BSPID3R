@@ -18,7 +18,7 @@ Categories:
   - Container / cloud        (Dockerfile, docker-compose.yml)
   - Package manifests        (package.json, composer.json)
 
-OWASP ref: A05:2021 Security Misconfiguration, A01:2021 Broken Access Control
+OWASP ref: A02:2025 Security Misconfiguration, A01:2025 Broken Access Control
 """
 
 import logging

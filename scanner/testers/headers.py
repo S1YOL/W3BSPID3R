@@ -16,7 +16,7 @@ Headers checked:
   - Permissions-Policy
   - Server / X-Powered-By version disclosure
 
-OWASP ref: A05:2021 Security Misconfiguration
+OWASP ref: A02:2025 Security Misconfiguration
 """
 
 import logging

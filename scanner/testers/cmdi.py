@@ -22,7 +22,7 @@ Variants tested:
   - Dollar substitution       $(id)
   - Windows equivalents       & dir, & whoami
 
-OWASP ref: A03:2021 Injection, CWE-78
+OWASP ref: A05:2025 Injection, CWE-78
 """
 
 import logging

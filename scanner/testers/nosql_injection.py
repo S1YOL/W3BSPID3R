@@ -16,7 +16,7 @@ Detection strategy:
   3. Check for MongoDB/NoSQL-specific error messages in responses
   4. Test for JavaScript injection in $where clauses
 
-OWASP ref: A03:2021 Injection
+OWASP ref: A05:2025 Injection
 """
 
 import logging

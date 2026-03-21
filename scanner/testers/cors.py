@@ -15,7 +15,7 @@ Detection strategy:
   3. Check if credentials are allowed (Access-Control-Allow-Credentials: true)
   4. Test for wildcard origins, null origin, and subdomain trust
 
-OWASP ref: A01:2021 Broken Access Control, A05:2021 Security Misconfiguration
+OWASP ref: A01:2025 Broken Access Control, A02:2025 Security Misconfiguration
 """
 
 import logging

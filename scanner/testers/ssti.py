@@ -18,7 +18,7 @@ Detection strategy:
 
 Example: injecting {{7*7}} into a Jinja2 template returns 49 in the response.
 
-OWASP ref: A03:2021 Injection
+OWASP ref: A05:2025 Injection
 """
 
 import logging

@@ -4,7 +4,7 @@ scanner/testers/xss.py
 -----------------------
 Cross-Site Scripting (XSS) vulnerability tester.
 
-Security concept (OWASP A03:2021 – Injection):
+Security concept (OWASP A05:2025 – Injection):
   XSS occurs when an application takes untrusted data and sends it to a web
   browser without proper validation or encoding. An attacker can execute
   arbitrary JavaScript in the victim's browser — stealing session cookies,

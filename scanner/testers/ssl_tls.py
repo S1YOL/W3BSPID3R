@@ -17,7 +17,7 @@ Detection strategy:
   5. Inspect supported TLS versions and cipher suites
   6. Check for weak protocols (SSLv3, TLS 1.0, TLS 1.1)
 
-OWASP ref: A02:2021 Cryptographic Failures
+OWASP ref: A04:2025 Cryptographic Failures
 """
 
 import logging

@@ -83,49 +83,47 @@ class VulnType:
 
 
 # ---------------------------------------------------------------------------
-# OWASP Top 10 (2021) mapping — maps each VulnType to its OWASP category
+# OWASP Top 10 (2025) mapping — maps each VulnType to its OWASP category
 # ---------------------------------------------------------------------------
 
 OWASP_TOP_10: dict[str, dict[str, str]] = {
-    # A01:2021 — Broken Access Control
-    VulnType.PATH_TRAVERSAL:  {"id": "A01:2021", "name": "Broken Access Control"},
-    VulnType.IDOR:            {"id": "A01:2021", "name": "Broken Access Control"},
-    VulnType.OPEN_REDIRECT:   {"id": "A01:2021", "name": "Broken Access Control"},
-    VulnType.CORS_MISCONFIG:  {"id": "A01:2021", "name": "Broken Access Control"},
+    # A01:2025 — Broken Access Control
+    VulnType.PATH_TRAVERSAL:  {"id": "A01:2025", "name": "Broken Access Control"},
+    VulnType.IDOR:            {"id": "A01:2025", "name": "Broken Access Control"},
+    VulnType.OPEN_REDIRECT:   {"id": "A01:2025", "name": "Broken Access Control"},
+    VulnType.CORS_MISCONFIG:  {"id": "A01:2025", "name": "Broken Access Control"},
 
-    # A02:2021 — Cryptographic Failures
-    VulnType.SSL_TLS:         {"id": "A02:2021", "name": "Cryptographic Failures"},
-    VulnType.COOKIE_SECURITY: {"id": "A02:2021", "name": "Cryptographic Failures"},
+    # A02:2025 — Security Misconfiguration
+    VulnType.SECURITY_HEADER: {"id": "A02:2025", "name": "Security Misconfiguration"},
+    VulnType.SENSITIVE_FILE:  {"id": "A02:2025", "name": "Security Misconfiguration"},
+    VulnType.WAF_DETECTED:    {"id": "A02:2025", "name": "Security Misconfiguration"},
+    VulnType.SUBDOMAIN_DISCOVERY: {"id": "A02:2025", "name": "Security Misconfiguration"},
 
-    # A03:2021 — Injection
-    VulnType.SQLI_ERROR:      {"id": "A03:2021", "name": "Injection"},
-    VulnType.SQLI_BOOLEAN:    {"id": "A03:2021", "name": "Injection"},
-    VulnType.SQLI_TIME:       {"id": "A03:2021", "name": "Injection"},
-    VulnType.SQLI_UNION:      {"id": "A03:2021", "name": "Injection"},
-    VulnType.XSS_REFLECTED:   {"id": "A03:2021", "name": "Injection"},
-    VulnType.XSS_STORED:      {"id": "A03:2021", "name": "Injection"},
-    VulnType.CMD_INJECTION:   {"id": "A03:2021", "name": "Injection"},
-    VulnType.NOSQL_INJECTION: {"id": "A03:2021", "name": "Injection"},
-    VulnType.SSTI:            {"id": "A03:2021", "name": "Injection"},
+    # A03:2025 — Software Supply Chain Failures
+    VulnType.VIRUSTOTAL:      {"id": "A03:2025", "name": "Software Supply Chain Failures"},
 
-    # A05:2021 — Security Misconfiguration
-    VulnType.SECURITY_HEADER: {"id": "A05:2021", "name": "Security Misconfiguration"},
-    VulnType.SENSITIVE_FILE:  {"id": "A05:2021", "name": "Security Misconfiguration"},
-    VulnType.WAF_DETECTED:    {"id": "A05:2021", "name": "Security Misconfiguration"},
+    # A04:2025 — Cryptographic Failures
+    VulnType.SSL_TLS:         {"id": "A04:2025", "name": "Cryptographic Failures"},
+    VulnType.COOKIE_SECURITY: {"id": "A04:2025", "name": "Cryptographic Failures"},
 
-    # A08:2021 — Software and Data Integrity Failures
-    VulnType.CSRF:            {"id": "A08:2021", "name": "Software and Data Integrity Failures"},
+    # A05:2025 — Injection
+    VulnType.SQLI_ERROR:      {"id": "A05:2025", "name": "Injection"},
+    VulnType.SQLI_BOOLEAN:    {"id": "A05:2025", "name": "Injection"},
+    VulnType.SQLI_TIME:       {"id": "A05:2025", "name": "Injection"},
+    VulnType.SQLI_UNION:      {"id": "A05:2025", "name": "Injection"},
+    VulnType.XSS_REFLECTED:   {"id": "A05:2025", "name": "Injection"},
+    VulnType.XSS_STORED:      {"id": "A05:2025", "name": "Injection"},
+    VulnType.CMD_INJECTION:   {"id": "A05:2025", "name": "Injection"},
+    VulnType.NOSQL_INJECTION: {"id": "A05:2025", "name": "Injection"},
+    VulnType.SSTI:            {"id": "A05:2025", "name": "Injection"},
 
-    # A06:2021 — Vulnerable and Outdated Components
-    VulnType.VIRUSTOTAL:      {"id": "A06:2021", "name": "Vulnerable and Outdated Components"},
-
-    # A07:2021 — Identification and Authentication Failures (subdomain recon)
-    VulnType.SUBDOMAIN_DISCOVERY: {"id": "A07:2021", "name": "Identification and Authentication Failures"},
+    # A07:2025 — Authentication Failures
+    VulnType.CSRF:            {"id": "A07:2025", "name": "Authentication Failures"},
 }
 
 
 def get_owasp_category(vuln_type: str) -> dict[str, str] | None:
-    """Get the OWASP Top 10 (2021) category for a vulnerability type."""
+    """Get the OWASP Top 10 (2025) category for a vulnerability type."""
     return OWASP_TOP_10.get(vuln_type)
 
 
@@ -178,7 +176,7 @@ class Finding:
 
     @property
     def owasp_category(self) -> dict[str, str] | None:
-        """Get the OWASP Top 10 (2021) category for this finding."""
+        """Get the OWASP Top 10 (2025) category for this finding."""
         return get_owasp_category(self.vuln_type)
 
     def to_dict(self) -> dict:

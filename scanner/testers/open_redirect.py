@@ -14,7 +14,7 @@ goto, url, etc.), then check whether the response:
   a) Contains a 3xx Location header pointing to our domain, OR
   b) Reflects our domain in a meta-refresh or JavaScript redirect.
 
-OWASP ref: A01:2021 Broken Access Control, CWE-601
+OWASP ref: A01:2025 Broken Access Control, CWE-601
 """
 
 import logging

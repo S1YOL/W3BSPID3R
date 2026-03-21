@@ -16,7 +16,7 @@ Security concept:
 This tester inspects Set-Cookie headers on every crawled page and flags
 insecure cookie configurations.
 
-OWASP ref: A07:2021 Identification and Authentication Failures
+OWASP ref: A04:2025 Cryptographic Failures
 """
 
 import logging
